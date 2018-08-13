@@ -19,7 +19,8 @@ class Api(object):
         loop = loop or asyncio.get_event_loop()
         self.app = web.Application(loop=loop)
         self.app.router.add_get('/', self.index)
-        self.app.router.add_get('/v2/system', self.handle_system)
+        self.app.router.add_get('/v2/miss_link', self.handle_mlink)
+        self.app.router.add_get('/v2/miss_seg', self.handle_mseg)
         self.site = site
         self.port = port
         self.db = {}
@@ -33,15 +34,16 @@ class Api(object):
             'info': str(self.site),
             'name': 'Linker for IPP-ONE',
             'api_version': 'V1',
-            'api': ['v2/system'],
+            'MLink_api': ['v2/miss_link'],
+            'MSeg_api': ['v2/miss_seg'],
             'modules version': 'IPP-I'}))
 
-    def get_system(self):
-        return {
-            'system': self.site.get_info(),
-        }
+    async def handle_mlink(self, request):
+        data = self.site.get_mlink()
+        return web.Response(
+            text=json.dumps(data))
 
-    async def handle_system(self, request):
-        data = self.get_system()
+    async def handle_mseg(self, request):
+        data = self.site.get_mseg()
         return web.Response(
             text=json.dumps(data))

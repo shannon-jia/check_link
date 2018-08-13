@@ -17,10 +17,26 @@ class CheckLink:
         self.db = db
         self.url = url
 
-        self.device_data = {}
+        self.device_data = []
         self.spk_link = []
         self.cam_link = []
-        self.lost = []
+        self.segments = []
+        self.lost_link = []
+        self.lost_segment = []
+
+    def start(self):
+        self._auto_loop()
+
+    def _auto_loop(self):
+        self.lost_link = []
+        self.lost_segment = []
+        self.preset_device()
+        self.preset_link()
+        self.preset_segment()
+        self.compare_link(self.spk_link)
+        self.compare_link(self.cam_link)
+        self.compare_segment()
+        self.loop.call_later(10, self._auto_loop)
 
     async def get(self, session):
         async with session.get(self.url) as response:
@@ -34,53 +50,15 @@ class CheckLink:
                 if not mesg.get('system'):
                     log.warning('Please check the svc_uri: {}'.format(self.url))
                     return
-                self.device_data = mesg
+                self.device_data = self.grep_device_data(mesg)
         except Exception as e:
             log.error(e)
 
-    def preset_device(self):
-        asyncio.ensure_future(self.fetch())
-
-    def preset_link(self):
-        asyncio.ensure_future(self.get_links())
-
-    def start(self):
-        self._auto_loop()
-
-    def _auto_loop(self):
-        self.lost = []
-        self.preset_device()
-        self.preset_link()
-        self.do_computation(self.spk_link)
-        self.do_computation(self.cam_link)
-        self.loop.call_later(10, self._auto_loop)
-
-    async def find(self, collection, conditions=None):
-        result = []
-        try:
-            result = await self.db.do_find(collection, conditions)
-        except Exception as e:
-            log.error('Connect to database has Error: {}'.format(e))
-        return result
-
-    async def get_links(self):
-        self.spk_link = []
-        self.cam_link = []
-        links_list = await self.find('links')
-        links = links_list
-        for link in links:
-            if 'SPK' in link.get('action', ''):
-                self.spk_link.append(link)
-            elif 'CAM' in link.get('action', ''):
-                self.cam_link.append(link)
-            else:
-                pass
-
-    def grep_device_data(self):
+    def grep_device_data(self, mesg):
         segs_info = []
-        if not self.device_data:
+        if not mesg:
             return
-        for line in self.device_data.get('system'):
+        for line in mesg.get('system'):
             sys_num = int(line.get('line', 0))
             segments = line.get('display_segments', '')
             if not segments:
@@ -95,17 +73,51 @@ class CheckLink:
                 segs_info.append(_seg)
         return segs_info
 
-    def do_computation(self, which_link):
+    def preset_device(self):
+        asyncio.ensure_future(self.fetch())
+
+    async def find(self, collection, conditions=None):
+        result = []
+        try:
+            result = await self.db.do_find(collection, conditions)
+        except Exception as e:
+            log.error('Connect to database has Error: {}'.format(e))
+        return result
+
+    async def get_segments(self):
+        segments_list = await self.find('segments')
+        if segments_list:
+            self.segments = segments_list
+
+    def preset_segment(self):
+        asyncio.ensure_future(self.get_segments())
+
+    async def get_links(self):
+        self.spk_link = []
+        self.cam_link = []
+        links_list = await self.find('links')
+        if links_list:
+            for link in links_list:
+                if 'SPK' in link.get('action', ''):
+                    self.spk_link.append(link)
+                elif 'CAM' in link.get('action', ''):
+                    self.cam_link.append(link)
+                else:
+                    pass
+
+    def preset_link(self):
+        asyncio.ensure_future(self.get_links())
+
+    def compare_link(self, which_link):
         if which_link == self.spk_link:
             event = 'SPK'
         elif which_link == self.cam_link:
             event = 'CAM'
         else:
             event = None
-        segs_info = self.grep_device_data()
-        if not segs_info or not which_link:
+        if not self.device_data or not which_link:
             return
-        for seg in segs_info:
+        for seg in self.device_data:
             _miss = {}
             seg_set = set()
             link_set = set()
@@ -122,9 +134,9 @@ class CheckLink:
                 _miss['name'] = seg.get('name', '')
                 _miss['event'] = event
                 _miss['miss_point'] = self._get_scope(diff)
-                self.lost.append(_miss)
+                self.lost_link.append(_miss)
                 log.warning('Unlinked point is {}'.format(_miss))
-        if not self.lost:
+        if not self.lost_link:
             log.info('All point be linked!')
 
     def _get_scope(self, points):
@@ -147,7 +159,24 @@ class CheckLink:
             scope_lst.append(s)
         return scope_lst
 
-    def get_info(self):
+    def get_mlink(self):
         with open("miss_point.json", "w") as f:
-            json.dump(self.lost, f)
-        return {'unlink_point': self.lost}
+            json.dump(self.lost_link, f)
+        return {'unlink_point': self.lost_link}
+
+    def compare_segment(self):
+        if not self.device_data or not self.segments:
+            return
+        for seg in self.device_data:
+            if seg.get('name') in [i.get('name') for i in self.segments]:
+                pass
+            else:
+                log.warning('Lost segment is {}'.format(seg))
+                self.lost_segment.append(seg)
+        if not self.lost_segment:
+            log.info('All segments have exit!')
+
+    def get_mseg(self):
+        with open("miss_segment.json", "w") as f:
+            json.dump(self.lost_segment, f)
+        return {'lost_segment': self.lost_segment}
